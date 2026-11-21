@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#152238"><link rel="manifest" href="manifest.webmanifest">
+<title>Klassenraum-Lautstärke</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#eef2f7;color:#172033;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+main{max-width:620px;margin:auto;padding:22px 16px 36px}.title{text-align:center;font-size:22px;font-weight:800;letter-spacing:.03em;margin:8px 0 22px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.card{background:white;border-radius:18px;padding:18px 12px;text-align:center;box-shadow:0 3px 14px #18243a12}
+.label{font-size:14px;color:#64748b}.value{font-size:clamp(34px,9vw,50px);font-weight:800;margin:12px 0 4px;white-space:nowrap}.unit{font-size:13px;color:#64748b}
+.status{font-size:20px;font-weight:800;text-align:center;margin:20px 0 8px}.meter{height:16px;background:#dbe2eb;border-radius:20px;overflow:hidden}.fill{height:100%;width:0%;background:#238636;transition:width .15s}
+.controls{display:flex;gap:8px;flex-wrap:wrap;margin:20px 0}.controls button{flex:1;min-width:125px;border:0;border-radius:12px;padding:14px 10px;font-size:16px;font-weight:700;background:#18365b;color:white}
+.controls button.secondary{background:#dce5ef;color:#172033}.controls button:disabled{opacity:.45}
+.panel{background:white;border-radius:16px;padding:16px;margin-top:12px}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.row input{width:88px;padding:10px;border:1px solid #cbd5e1;border-radius:8px;font-size:17px}
+.note{color:#64748b;line-height:1.45;font-size:13px;margin-top:16px}
+</style></head>
+<body><main>
+<div class="title">KLASSENRAUM-LAUTSTÄRKE</div>
+<div class="grid">
+ <section class="card"><div class="label">Aktuelle Lautstärke</div><div class="value" id="current">—</div><div class="unit">relative Einheiten (0–100)</div></section>
+ <section class="card"><div class="label">Spitzenwert seit Reset</div><div class="value" id="peak">—</div><div class="unit">höchster Wert</div></section>
+</div>
+<div class="status" id="zone">Messung bereit</div><div class="meter"><div class="fill" id="fill"></div></div>
+<div class="controls"><button id="start">Messung starten</button><button id="stop" class="secondary" disabled>Stop</button><button id="reset" class="secondary">Spitzenwert zurücksetzen</button></div>
+<section class="panel">
+ <strong>Lautstärkegrenze</strong>
+ <div class="row" style="margin-top:12px"><label for="threshold">Ab welchem Wert soll Rot angezeigt werden?</label><input id="threshold" type="number" min="20" max="100" value="65"><button id="apply" class="secondary" style="padding:10px;border:0;border-radius:9px">Übernehmen</button></div>
+</section>
+<p class="note">Die Anzeige zeigt die relative Lautstärke über das jeweilige Mikrofon an – keine geeichten Dezibel. Die Werte eignen sich vor allem dazu, Lautstärkeveränderungen im Raum sichtbar zu machen. Die Empfindlichkeit kann zwischen PC und iPhone unterschiedlich sein.</p>
+</main>
+<script>
+let ctx,stream,source,analyser,raf,current=null,peak=null,threshold=65;
+const $=id=>document.getElementById(id);
+function toRelative(dbfs){return Math.max(0,Math.min(100,(dbfs+60)*(100/60)));}
+function paint(){
+ if(current===null)return;
+ $('current').textContent=Math.round(current);$('peak').textContent=Math.round(peak);
+ $('fill').style.width=current+'%';
+ let z,c;
+ if(current<threshold*.55){z='SEHR LEISE';c='#238636'}
+ else if(current<threshold*.78){z='LEISE';c='#579b35'}
+ else if(current<threshold){z='ERHÖHT';c='#b78103'}
+ else if(current<Math.min(100,threshold+15)){z='LAUT';c='#d66b00'}
+ else{z='SEHR LAUT';c='#c62828'}
+ $('zone').textContent=z;$('zone').style.color=c;$('fill').style.background=c;
+}
+function tick(){
+ if(!analyser)return;
+ const a=new Float32Array(analyser.fftSize);analyser.getFloatTimeDomainData(a);
+ let sum=0;for(let i=0;i<a.length;i++)sum+=a[i]*a[i];
+ const rms=Math.sqrt(sum/a.length),dbfs=20*Math.log10(Math.max(rms,1e-9));
+ current=toRelative(dbfs);peak=peak===null?current:Math.max(peak,current);paint();
+ raf=requestAnimationFrame(tick);
+}
+async function start(){
+ try{
+  stream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
+  ctx=new (window.AudioContext||window.webkitAudioContext)();await ctx.resume();
+  source=ctx.createMediaStreamSource(stream);analyser=ctx.createAnalyser();analyser.fftSize=4096;source.connect(analyser);
+  $('start').disabled=true;$('stop').disabled=false;tick();
+ }catch(e){alert('Mikrofonzugriff nicht möglich. Bitte Safari-Mikrofonberechtigung prüfen und die Seite über HTTPS öffnen.\\n'+e.message);}
+}
+function stop(){
+ if(raf)cancelAnimationFrame(raf);
+ if(stream)stream.getTracks().forEach(t=>t.stop());
+ if(ctx)ctx.close();stream=null;ctx=null;analyser=null;
+ $('start').disabled=false;$('stop').disabled=true;
+}
+$('start').addEventListener('click',start);$('stop').addEventListener('click',stop);
+$('reset').addEventListener('click',()=>{peak=current;if(peak!==null)$('peak').textContent=Math.round(peak);else $('peak').textContent='—';});
+$('apply').addEventListener('click',()=>{const v=Number($('threshold').value);if(!Number.isFinite(v)||v<20||v>100){alert('Bitte einen Wert zwischen 20 und 100 eingeben.');return;}threshold=v;});
+window.addEventListener('pagehide',stop);
+if('serviceWorker' in navigator)navigator.serviceWorker.register('./sw.js').catch(()=>{});
+</script></body></html>
